@@ -826,13 +826,6 @@ bool PlayerbotAIConfig::Initialize()
     missionsMaxDeaths = std::max<uint32>(1, sConfigMgr->GetOption<uint32>("AiPlayerbot.Missions.MaxDeaths", 3, false));
     missionsTeleportFallback = sConfigMgr->GetOption<bool>("AiPlayerbot.Missions.TeleportFallback", true, false);
     missionsTeleportToSpot = sConfigMgr->GetOption<bool>("AiPlayerbot.Missions.TeleportToSpot", true, false);
-    personalityEnable = sConfigMgr->GetOption<bool>("AiPlayerbot.Personality.Enable", false, false);
-    personalityDir = sConfigMgr->GetOption<std::string>("AiPlayerbot.Personality.Dir", "personalities", false);
-    personalityMaxFileBytes = std::clamp<uint32>(
-        sConfigMgr->GetOption<uint32>("AiPlayerbot.Personality.MaxFileBytes", 4096, false), 256, 65536);
-    personalitySceneEvents = std::clamp<uint32>(
-        sConfigMgr->GetOption<uint32>("AiPlayerbot.Personality.SceneEvents", 40, false), 5, 200);
-    personalityLootQuality = std::min<uint32>(sConfigMgr->GetOption<uint32>("AiPlayerbot.Personality.LootQuality", 3, false), 5);
     guildBankDepositEnable = sConfigMgr->GetOption<bool>("AiPlayerbot.GuildBankDeposit.Enable", false, false);
     LoadGuildBankDepositItems(sConfigMgr->GetOption<std::string>("AiPlayerbot.GuildBankDeposit.Items", "tradegoods", false));
     guildBankDepositKeepGold = sConfigMgr->GetOption<uint32>("AiPlayerbot.GuildBankDeposit.KeepGold", 100, false);

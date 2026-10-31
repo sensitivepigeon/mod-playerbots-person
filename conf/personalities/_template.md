@@ -19,3 +19,9 @@ Loves cheese, forges, a good fight. Hates boats, elves, waiting.
 
 # Never
 Never talks about the real world. Never flirts.
+
+# Voice
+character
+<!-- "character": a person of this world, speaking in character (the default).
+     "player": a real person at the keyboard playing this character, chatting like players do. -->
+

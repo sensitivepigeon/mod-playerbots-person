@@ -1,5 +1,6 @@
 // Builds on its own, with no core: g++ -std=c++20 -I src/Mgr/Personality tests/personality_text.cpp
 // (or cl /std:c++20 /EHsc /I src\Mgr\Personality tests\personality_text.cpp)
+#include "PersonalityPrompt.h"
 #include "PersonalityText.h"
 
 #include <cassert>
@@ -62,4 +63,56 @@ int main()
     assert(!ParsePersonality("<!-- a long comment that is not counted -->abc", 3).truncated);
     scene.SetCapacity(1);
     assert(scene.Lines() == std::vector<std::string>{"[21:00] Thraxa died to Sneed"});
+
+    // Lines the model writes, made safe for party chat.
+    assert(PersonalitySanitizeLine("Gidaeus: \"chill out, Pigeon\"", "Gidaeus") == "chill out, Pigeon");
+    assert(PersonalitySanitizeLine("*sighs*", "Gidaeus") == "sighs");
+    assert(PersonalitySanitizeLine("look |cffff0000|Hitem:19019|h[Thunderfury]|h|r\nnice", "X") ==
+           "look cffff0000Hitem:19019h[Thunderfury]hr nice");
+    assert(PersonalitySanitizeLine("\xE2\x80\x9Cquoted\xE2\x80\x9D", "X") == "quoted");
+    assert(PersonalitySanitizeLine("  ", "X").empty());
+    assert(PersonalitySanitizeLine("one two three four", "X", 12) == "one two");  // cut at a word
+    assert(PersonalitySanitizeLine("it's fine", "X") == "it's fine");
+
+    // Voice: a setting, default character.
+    PersonalityText player = ParsePersonality("Chill.\n# Voice\nPlayer, at the keyboard\n", 4096);
+    assert(PersonalityVoiceOf(player) == PersonalityVoice::Player);
+    assert(PersonalityVoiceOf(ParsePersonality("Chill.", 4096)) == PersonalityVoice::Character);
+    assert(PersonalityVoiceOf(ParsePersonality("# voice\nsomething else", 4096)) == PersonalityVoice::Character);
+
+    // The system prompt depends on nothing but the characters, in guid order, and never shows "Voice".
+    PromptInput a;
+    a.playerName = "Pigeon";
+    a.characters = {{7, "Gidaeus", player}, {3, "Brana", ParsePersonality("Healer.", 4096)}};
+    PromptInput b = a;
+    std::swap(b.characters[0], b.characters[1]);
+    b.cards = {{"Pigeon", true, 30, "Human", "Chronomancer", "", "", "Westfall", 90, 50, true}};
+    b.scene = {"[21:00] something"};
+    b.trigger = "Pigeon said in party: \"hi\"";
+    std::string const system = BuildPersonalitySystem(a);
+    assert(system == BuildPersonalitySystem(b));
+    assert(system.find("## Brana (voice: character)") < system.find("## Gidaeus (voice: player)"));
+    assert(system.find("### Voice") == std::string::npos);
+    assert(system.find("travel with Pigeon, and Pigeon wrote who they are") != std::string::npos);
+    std::string const user = BuildPersonalityUser(b);
+    assert(user.find("- Pigeon (the player): level 30 Human Chronomancer, in Westfall, 90% health, 50% mana") !=
+           std::string::npos);
+    assert(user.find("WHAT JUST HAPPENED\nPigeon said in party: \"hi\"") != std::string::npos);
+    assert(user.find("LINES ALREADY SAID") == std::string::npos);  // nothing said yet: no empty section
+
+    // The frame: the built-in one with its placeholders filled, or the file's text.
+    assert(system.find("{player}") == std::string::npos && system.find("{max_lines}") == std::string::npos);
+    assert(system.find("At most 3 lines") != std::string::npos);
+    assert(system.find("Write in English.") != std::string::npos);
+    assert(system.find("A description is a starting point, not a script.") != std::string::npos);
+    PromptInput custom = a;
+    custom.frame = PersonalityTrim(PersonalityStripComments("\xEF\xBB\xBF<!-- note -->\r\nBe {player}'s pirates. {max_lines} lines.\r\n"));
+    std::string const customSystem = BuildPersonalitySystem(custom);
+    assert(customSystem.rfind("Be Pigeon's pirates. 3 lines.\n\nCHARACTERS\n", 0) == 0);
+
+    b.recentLines = {"Gidaeus: Muradin's beard!", "Brana: awww :)"};
+    std::string const repeated = BuildPersonalityUser(b);
+    assert(repeated.find("LINES ALREADY SAID (say something new: none of their catchphrases, jokes or openings again)\n"
+                         "Gidaeus: Muradin's beard!\nBrana: awww :)\n") != std::string::npos);
+    assert(repeated.find("LINES ALREADY SAID") < repeated.find("WHAT JUST HAPPENED"));
 }

@@ -54,10 +54,12 @@ inline bool IsSafePersonalityName(std::string_view name)
 
 // The headings a personality file may use, in the order the prompt will show them. Text before the
 // first heading belongs to the first one.
-inline std::array<char const*, 5> const& PersonalityKnownHeadings()
+// "Voice" is a setting, not a description: its first word, "character" (the default) or "player", says how
+// the companion speaks (PersonalityPrompt.h).
+inline std::array<char const*, 6> const& PersonalityKnownHeadings()
 {
-    static std::array<char const*, 5> const headings = {"Who I am", "How I talk", "The others", "Likes and dislikes",
-                                                       "Never"};
+    static std::array<char const*, 6> const headings = {"Who I am", "How I talk", "The others", "Likes and dislikes",
+                                                       "Never", "Voice"};
     return headings;
 }
 
@@ -84,12 +86,10 @@ struct PersonalityText
     bool Empty() const { return sections.empty(); }
 };
 
-// A personality file as written by people: an optional UTF-8 byte order mark (Notepad), Windows line
-// ends, <!-- comments --> and Markdown headings ("# How I talk", "## The others").
-inline PersonalityText ParsePersonality(std::string raw, size_t maxBytes)
+// A text file as written by people: an optional UTF-8 byte order mark (Notepad), Windows line ends and
+// <!-- comments --> are taken out.
+inline std::string PersonalityStripComments(std::string raw)
 {
-    PersonalityText parsed;
-
     if (raw.size() >= 3 && raw.compare(0, 3, "\xEF\xBB\xBF") == 0)
         raw.erase(0, 3);
 
@@ -108,6 +108,14 @@ inline PersonalityText ParsePersonality(std::string raw, size_t maxBytes)
         if (raw[i] != '\r')
             text += raw[i];
     }
+    return text;
+}
+
+// A personality file: PersonalityStripComments, then Markdown headings ("# How I talk", "## The others").
+inline PersonalityText ParsePersonality(std::string raw, size_t maxBytes)
+{
+    PersonalityText parsed;
+    std::string text = PersonalityStripComments(std::move(raw));
 
     // The limit counts what the model would read: comments and line ends are already gone.
     if (text.size() > maxBytes)
@@ -212,6 +220,59 @@ inline std::string PersonalityPlainChat(std::string_view raw, size_t maxBytes = 
         out.resize(cut);
     }
     return out;
+}
+
+// A line the model wrote, made safe for party chat: no '|' (an escape code could forge an item or quest
+// link), one line, no "Name:" in front, no quotes or asterisks around it, at most maxBytes, cut at a word.
+inline std::string PersonalitySanitizeLine(std::string_view raw, std::string_view speaker, size_t maxBytes = 255)
+{
+    std::string text;
+    for (char c : raw)
+    {
+        if (c == '|')
+            continue;
+        if (c == '\n' || c == '\r' || c == '\t')
+            c = ' ';
+        if (c == ' ' && (text.empty() || text.back() == ' '))
+            continue;
+        text += c;
+    }
+    text = PersonalityTrim(text);
+
+    std::string const prefix = PersonalityFoldAscii(speaker) + ":";
+    if (!speaker.empty() && PersonalityFoldAscii(text.substr(0, prefix.size())) == prefix)
+        text = PersonalityTrim(std::string_view(text).substr(prefix.size()));
+
+    // Wrapping quotes and emote stars, also the typographic ones (UTF-8).
+    static char const* const wrappers[][2] = {{"\"", "\""}, {"\xE2\x80\x9C", "\xE2\x80\x9D"}, {"\xC2\xAB", "\xC2\xBB"},
+                                              {"*", "*"}, {"'", "'"}};
+    for (bool changed = true; changed;)
+    {
+        changed = false;
+        for (auto const& pair : wrappers)
+        {
+            std::string_view const open = pair[0];
+            std::string_view const close = pair[1];
+            if (text.size() >= open.size() + close.size() + 1 && text.compare(0, open.size(), open) == 0 &&
+                text.compare(text.size() - close.size(), close.size(), close) == 0)
+            {
+                text = PersonalityTrim(std::string_view(text).substr(open.size(), text.size() - open.size() - close.size()));
+                changed = true;
+            }
+        }
+    }
+
+    if (text.size() > maxBytes)
+    {
+        size_t cut = maxBytes;
+        while (cut > 0 && (static_cast<unsigned char>(text[cut]) & 0xC0) == 0x80)
+            --cut;
+        size_t const space = text.rfind(' ', cut);
+        if (space != std::string::npos && space > maxBytes / 2)
+            cut = space;
+        text = PersonalityTrim(std::string_view(text).substr(0, cut));
+    }
+    return text;
 }
 
 struct SceneEntry

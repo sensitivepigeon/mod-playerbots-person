@@ -9,7 +9,6 @@
 #include "Event.h"
 #include "PersonalityMgr.h"
 #include "PlayerbotAI.h"
-#include "PlayerbotAIConfig.h"
 #include "Playerbots.h"
 
 #include <algorithm>
@@ -34,7 +33,7 @@ bool PersonalityAction::Execute(Event event)
     if (!PersonalityMgr::IsPersonalityAlt(bot, requester))
         return true;
 
-    if (!sPlayerbotAIConfig.personalityEnable)
+    if (!sPersonalityMgr.Enabled())
     {
         botAI->TellMasterNoFacing(sPersonalityMgr.StatusLine(bot));
         return true;

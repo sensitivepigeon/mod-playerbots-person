@@ -14,7 +14,6 @@
 #include "GroupScript.h"
 #include "Player.h"
 #include "PlayerScript.h"
-#include "PlayerbotAIConfig.h"
 #include "ScriptMgr.h"
 
 namespace
@@ -33,55 +32,55 @@ public:
 
     void OnPlayerUpdate(Player* player, uint32 diff) override
     {
-        if (sPlayerbotAIConfig.personalityEnable)
+        if (sPersonalityMgr.Enabled())
             sPersonalityMgr.OnPlayerUpdate(player, diff);
     }
 
     void OnPlayerJustDied(Player* player) override
     {
-        if (sPlayerbotAIConfig.personalityEnable)
+        if (sPersonalityMgr.Enabled())
             sPersonalityMgr.OnDied(player, nullptr);
     }
 
     void OnPlayerKilledByCreature(Creature* killer, Player* killed) override
     {
-        if (sPlayerbotAIConfig.personalityEnable)
+        if (sPersonalityMgr.Enabled())
             sPersonalityMgr.OnDied(killed, killer);
     }
 
     void OnPlayerCreatureKill(Player* killer, Creature* killed) override
     {
-        if (sPlayerbotAIConfig.personalityEnable)
+        if (sPersonalityMgr.Enabled())
             sPersonalityMgr.OnCreatureKill(killer, killed);
     }
 
     void OnPlayerLootItem(Player* player, Item* item, uint32 /*count*/, ObjectGuid /*lootguid*/) override
     {
-        if (sPlayerbotAIConfig.personalityEnable)
+        if (sPersonalityMgr.Enabled())
             sPersonalityMgr.OnLoot(player, item);
     }
 
     void OnPlayerUpdateZone(Player* player, uint32 newZone, uint32 /*newArea*/) override
     {
-        if (sPlayerbotAIConfig.personalityEnable)
+        if (sPersonalityMgr.Enabled())
             sPersonalityMgr.OnZone(player, newZone);
     }
 
     void OnPlayerMapChanged(Player* player) override
     {
-        if (sPlayerbotAIConfig.personalityEnable)
+        if (sPersonalityMgr.Enabled())
             sPersonalityMgr.OnMapChanged(player);
     }
 
     void OnPlayerLevelChanged(Player* player, uint8 oldLevel) override
     {
-        if (sPlayerbotAIConfig.personalityEnable)
+        if (sPersonalityMgr.Enabled())
             sPersonalityMgr.OnLevelChanged(player, oldLevel);
     }
 
     void OnPlayerCompleteQuest(Player* player, Quest const* quest) override
     {
-        if (sPlayerbotAIConfig.personalityEnable)
+        if (sPersonalityMgr.Enabled())
             sPersonalityMgr.OnQuestComplete(player, quest);
     }
 
@@ -100,7 +99,20 @@ public:
 class PersonalityWorldScript : public WorldScript
 {
 public:
-    PersonalityWorldScript() : WorldScript("PersonalityWorldScript", {WORLDHOOK_ON_UPDATE, WORLDHOOK_ON_SHUTDOWN}) {}
+    PersonalityWorldScript()
+        : WorldScript("PersonalityWorldScript", {WORLDHOOK_ON_BEFORE_WORLD_INITIALIZED, WORLDHOOK_ON_AFTER_CONFIG_LOAD,
+                                                 WORLDHOOK_ON_UPDATE, WORLDHOOK_ON_SHUTDOWN})
+    {
+    }
+
+    void OnBeforeWorldInitialized() override { sPersonalityMgr.LoadConfig(); }
+
+    // ".reload config": the model, the budgets and the key are taken without a restart.
+    void OnAfterConfigLoad(bool reload) override
+    {
+        if (reload)
+            sPersonalityMgr.LoadConfig();
+    }
 
     void OnUpdate(uint32 diff) override { sPersonalityMgr.Update(diff); }
 
