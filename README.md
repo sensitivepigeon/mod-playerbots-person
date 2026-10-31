@@ -1,3 +1,7 @@
+> [!PERSONALITY BRANCH]
+> **This is Pigeon's personality branch! Be aware it is in a testing state and has no instructions!**
+
+
 > [!IMPORTANT]
 > **This is the Conquest of Azeroth fork of mod-playerbots.** Build instructions, recommended settings and the current
 > status of the CoA bots are in **[README_COA.md](README_COA.md)**.
