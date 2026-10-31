@@ -455,6 +455,12 @@ public:
     // Alts and the SquidBots Lite addon (CoaAltAddon).
     bool altChatToAddon;
     bool catchUpQuestChains;
+    // AiPlayerbot.Personality.*: alts with a file <Dir>/<CharacterName>.md keep a scene of their party's play.
+    bool personalityEnable;
+    std::string personalityDir;
+    uint32 personalityMaxFileBytes;
+    uint32 personalitySceneEvents;
+    uint32 personalityLootQuality;
     // AiPlayerbot.GuildBankDeposit.*: bots of a real player's guild fill the guild bank near a guild vault.
     bool guildBankDepositEnable;
     std::vector<std::pair<int32, int32>> guildBankDepositItems;  // item class, subclass (-1 = all)

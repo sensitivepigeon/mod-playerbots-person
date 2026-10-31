@@ -46,6 +46,7 @@
 #include "ObjectGuid.h"
 #include "ObjectMgr.h"
 #include "PerfMonitor.h"
+#include "PersonalityMgr.h"
 #include "Player.h"
 #include "PlayerbotAIConfig.h"
 #include "PlayerbotGuildMgr.h"
@@ -840,9 +841,12 @@ void PlayerbotAI::HandleCommands()
             continue;
         }
 
-        if (!helper.ParseChatCommand(command, owner, it->GetType() == CHAT_MSG_WHISPER) &&
-            it->GetType() == CHAT_MSG_WHISPER)
+        if (!helper.ParseChatCommand(command, owner, it->GetType() == CHAT_MSG_WHISPER))
         {
+            // Talk, not an order: the party's scene keeps it, if its alts have a personality.
+            sPersonalityMgr.OnUnparsedChat(bot, owner, it->GetType(), command);
+
+            // if (it->GetType() == CHAT_MSG_WHISPER)
             // ostringstream out; out << "Unknown command " << command;
             // TellPlayer(out);
             // helper.ParseChatCommand("help");
