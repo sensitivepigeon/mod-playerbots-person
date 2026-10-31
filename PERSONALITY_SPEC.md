@@ -1,8 +1,24 @@
 # Spec: Bot Personalities (alt bots, party dialogue, memory)
 
-Status: draft v2, 30 October 2026. **Phase 1 written** on branch `feat/personality-phase1` (not yet built against the
-CoA core). On the SquidBots repack the bot server runs from `CoA-Bots\Core\`, so files go in
-`CoA-Bots\Core\personalities\`. Branch base: `coa` (v2.8.2 in progress), fork `sensitivepigeon/mod-playerbots-person`.
+Status, 30 October 2026, on branch `feat/personality-phase1`:
+
+- **Phase 1 done**: built against the CoA core and tested in game.
+- **Phase 2 written**: the alts talk. On the SquidBots repack the bot server runs from `CoA-Bots\Core\`, so files go
+  in `CoA-Bots\Core\personalities\`.
+
+Phase 2 differs from the text below in these points:
+
+- **HTTP and JSON**: Boost.Beast and Boost.JSON (header-only), with OpenSSL. Both are already in every AzerothCore
+  Boost, so nothing is vendored. On Windows, OpenSSL is given the Windows trusted root certificates.
+- **API version**: requests send `anthropic-version: 2026-10-21`, which rejects `temperature`/`top_p`/`top_k`.
+  `fallbacks: "default"` is sent only for the models that take it, so never for Claude Haiku 5.5.
+- **Settings**: they live in `PersonalityConfig` (`PersonalityMgr.h`), not in `PlayerbotAIConfig`. A new setting
+  rebuilds only the personality files, and `.reload config` reads them all again.
+- **Voice**: a `# Voice` heading in the file sets it to `character` (the default) or `player`. With `player`, the
+  alt chats like a real person at the keyboard, not in roleplay.
+- **Delivery**: alts say their lines from their own `OnPlayerUpdate`. `PlayerbotAI.cpp` has no second seam.
+- **Stats**: `.playerbots personality stats` shows the calls, the tokens (with what the cache saved) and the last
+  error. Branch base: `coa` (v2.8.2 in progress), fork `sensitivepigeon/mod-playerbots-person`.
 
 Decisions so far:
 

@@ -54,6 +54,7 @@ public:
         static ChatCommandTable playerbotsPersonalityCommandTable = {
             {"scene", HandlePersonalitySceneCommand, SEC_GAMEMASTER, Console::Yes},
             {"reload", HandlePersonalityReloadCommand, SEC_GAMEMASTER, Console::Yes},
+            {"stats", HandlePersonalityStatsCommand, SEC_GAMEMASTER, Console::Yes},
         };
 
         static ChatCommandTable playerbotsCommandTable = {
@@ -341,7 +342,7 @@ public:
             handler->SendSysMessage("Name an online player: .playerbots personality scene [name]");
             return true;
         }
-        if (!sPlayerbotAIConfig.personalityEnable)
+        if (!sPersonalityMgr.Enabled())
             handler->SendSysMessage("AiPlayerbot.Personality.Enable is 0: no scene is kept.");
         for (std::string const& line : sPersonalityMgr.DescribeScene(player->GetGroup()))
             handler->SendSysMessage(line);
@@ -354,6 +355,14 @@ public:
         sPersonalityMgr.ReloadAll();
         handler->PSendSysMessage("Reading the personality files of the online alts again, from {}.",
                                  sPersonalityMgr.FolderPath());
+        return true;
+    }
+
+    // .playerbots personality stats: the provider in use, the calls made since the start and what they cost.
+    static bool HandlePersonalityStatsCommand(ChatHandler* handler)
+    {
+        for (std::string const& line : sPersonalityMgr.DescribeStats())
+            handler->SendSysMessage(line);
         return true;
     }
 

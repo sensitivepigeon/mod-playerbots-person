@@ -833,13 +833,6 @@ bool PlayerbotAIConfig::Initialize()
     catchUpQuestChains = sConfigMgr->GetOption<bool>("AiPlayerbot.CatchUpQuestChains", true, false);
     guildBankDepositEnable = sConfigMgr->GetOption<bool>("AiPlayerbot.GuildBankDeposit.Enable", true, false);
     LoadGuildBankDepositItems(sConfigMgr->GetOption<std::string>("AiPlayerbot.GuildBankDeposit.Items", "ore,herb,leather,cloth,boe", false));
-    personalityEnable = sConfigMgr->GetOption<bool>("AiPlayerbot.Personality.Enable", false, false);
-    personalityDir = sConfigMgr->GetOption<std::string>("AiPlayerbot.Personality.Dir", "personalities", false);
-    personalityMaxFileBytes = std::clamp<uint32>(
-        sConfigMgr->GetOption<uint32>("AiPlayerbot.Personality.MaxFileBytes", 4096, false), 256, 65536);
-    personalitySceneEvents = std::clamp<uint32>(
-        sConfigMgr->GetOption<uint32>("AiPlayerbot.Personality.SceneEvents", 40, false), 5, 200);
-    personalityLootQuality = std::min<uint32>(sConfigMgr->GetOption<uint32>("AiPlayerbot.Personality.LootQuality", 3, false), 5);
     guildBankDepositKeepGold = sConfigMgr->GetOption<uint32>("AiPlayerbot.GuildBankDeposit.KeepGold", 100, false);
     guildBankDepositMinStack = std::max<uint32>(1, sConfigMgr->GetOption<uint32>("AiPlayerbot.GuildBankDeposit.MinStack", 1, false));
     guildBankDepositTab = std::min<uint32>(sConfigMgr->GetOption<uint32>("AiPlayerbot.GuildBankDeposit.Tab", 0, false), 6);

@@ -1847,11 +1847,51 @@ AiPlayerbot.AltChatToAddon = 1
 # Bot personalities, for your own characters played as bots (alts) only. An alt gets one when a file
 # <Dir>/<CharacterName>.md exists (start from personalities/_template.md); without a file nothing changes.
 # While you (one real player) group with such alts, the server keeps a scene of what your party does:
-# deaths, wipes, bosses, good loot, levels, quests, places, and what you say in party chat.
-# This version only keeps the scene (".playerbots personality scene" shows it); the alts do not talk yet.
-# Whisper "personality ?" or "personality reload" to your alt.
+# deaths, wipes, bosses, good loot, levels, quests, places, and what you say in party chat. With a
+# Provider and an API key, the alts talk in party chat: they answer you, react to what happens and
+# banter in quiet moments. The party chat and the scene of these groups are sent to the AI provider.
+# Whisper "personality ?" or "personality reload" to your alt; ".playerbots personality scene" and
+# ".playerbots personality stats" for GMs. Every AiPlayerbot.Personality setting is read again on
+# ".reload config".
 # Default: 0 (disabled)
 AiPlayerbot.Personality.Enable = 0
+
+# Who writes the lines: none (the scene is kept, the alts stay silent) or anthropic.
+# Default: none
+AiPlayerbot.Personality.Provider = "none"
+
+# The API key. Prefer the environment variable of the world server's process, so that the key never
+# sits in this file or its backups; ApiKey is read only when the variable is empty. Never logged.
+# Default: ANTHROPIC_API_KEY and ""
+AiPlayerbot.Personality.ApiKeyEnv = "ANTHROPIC_API_KEY"
+AiPlayerbot.Personality.ApiKey = ""
+
+# The model and how hard it thinks (low, medium, high). claude-haiku-5-5 costs far less per line.
+# MaxTokens covers the thinking too; TimeoutMs ends a call that takes too long (the line is then lost).
+# Fallbacks: a declined request is retried server-side on another model, for the models that take it.
+# Default: claude-opus-5-5, low, 4096, 30000, 1
+AiPlayerbot.Personality.Model = "claude-opus-5-5"
+AiPlayerbot.Personality.Effort = "low"
+AiPlayerbot.Personality.MaxTokens = 4096
+AiPlayerbot.Personality.TimeoutMs = 30000
+AiPlayerbot.Personality.Fallbacks = 1
+
+# Lines in one exchange (all alts together), the chance in % that a notable event (a death, good loot,
+# a rare, a quest, a dungeon entered) gets a reaction (a wipe, a boss, a level always do), and the
+# chance of some banter after IdleBanterSec seconds out of combat with nothing said.
+# Default: 3, 35, 120, 25
+AiPlayerbot.Personality.MaxLines = 3
+AiPlayerbot.Personality.EventChance = 35
+AiPlayerbot.Personality.IdleBanterSec = 120
+AiPlayerbot.Personality.IdleChance = 25
+
+# Budgets: seconds between two exchanges of a party (half when you talked), exchanges per party and
+# hour, API calls per account and day, and calls at the same time on the whole server. 0: no limit.
+# Default: 20, 40, 400, 4
+AiPlayerbot.Personality.ExchangeCooldownSec = 20
+AiPlayerbot.Personality.MaxExchangesPerHour = 40
+AiPlayerbot.Personality.DailyCallsPerAccount = 400
+AiPlayerbot.Personality.MaxInFlight = 4
 
 # Folder of the personality files, relative to the world server's folder. Give each realm its own.
 # Default: personalities
