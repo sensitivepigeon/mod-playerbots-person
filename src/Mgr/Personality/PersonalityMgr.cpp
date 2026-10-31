@@ -156,6 +156,70 @@ PromptCard ToPromptCard(PersonalityCard const& card)
 
 // Milliseconds from `then` to `now` on getMSTime()'s wrapping clock; negative when `then` is still ahead.
 int32 MsSince(uint32 then, uint32 now) { return int32(now - then); }
+
+// "2026-10-31", server time: the date in front of a memory.
+std::string Today()
+{
+    time_t const now = time(nullptr);
+    std::tm parts{};
+#ifdef _WIN32
+    localtime_s(&parts, &now);
+#else
+    localtime_r(&now, &parts);
+#endif
+    char text[16];
+    std::strftime(text, sizeof(text), "%Y-%m-%d", &parts);
+    return text;
+}
+
+// A file of the folder by its name, in any case: Linux tells "thraxa.md" from "Thraxa.md". Empty when none.
+std::filesystem::path FindInFolder(std::filesystem::path const& folder, std::string const& fileName)
+{
+    std::error_code error;
+    std::filesystem::path exact = folder / Utf8Path(fileName);
+    if (std::filesystem::is_regular_file(exact, error))
+        return exact;
+    std::string const wanted = PersonalityFoldAscii(fileName);
+    for (std::filesystem::directory_iterator it(folder, error), end; !error && it != end; it.increment(error))
+        if (it->is_regular_file(error) && PersonalityFoldAscii(PathUtf8(it->path().filename())) == wanted)
+            return it->path();
+    return {};
+}
+
+std::string ReadAll(std::filesystem::path const& file)
+{
+    std::ifstream in(file, std::ios::binary);
+    std::string raw(ReadLimit, '\0');
+    in.read(raw.data(), std::streamsize(raw.size()));
+    raw.resize(size_t(in.gcount()));
+    return raw;
+}
+
+// A memory file: each "- " line is a memory, oldest first; anything else (a title, notes) is kept as written.
+std::vector<std::string> MemoryBullets(std::string const& text)
+{
+    std::vector<std::string> bullets;
+    for (size_t start = 0; start < text.size();)
+    {
+        size_t end = text.find('\n', start);
+        if (end == std::string::npos)
+            end = text.size();
+        std::string const line = PersonalityTrim(std::string_view(text).substr(start, end - start));
+        if (line.size() > 2 && line.compare(0, 2, "- ") == 0)
+            bullets.push_back(PersonalityTrim(std::string_view(line).substr(2)));
+        start = end + 1;
+    }
+    return bullets;
+}
+
+PersonalityApiSettings SummarySettings(PersonalityConfig const& cfg)
+{
+    PersonalityApiSettings summary = cfg.api;
+    summary.model = cfg.summaryModel;
+    summary.effort = "low";
+    summary.maxTokens = 2048;
+    return summary;
+}
 }  // namespace
 
 PersonalityMgr::~PersonalityMgr() { Stop(); }
@@ -203,6 +267,10 @@ void PersonalityMgr::LoadConfig()
     c.maxExchangesPerHour = sConfigMgr->GetOption<uint32>(p + "MaxExchangesPerHour", 40, false);
     c.dailyCallsPerAccount = sConfigMgr->GetOption<uint32>(p + "DailyCallsPerAccount", 400, false);
     c.maxInFlight = std::clamp<uint32>(sConfigMgr->GetOption<uint32>(p + "MaxInFlight", 4, false), 1, 16);
+    c.memory = sConfigMgr->GetOption<bool>(p + "Memory", true, false);
+    c.summaryModel = sConfigMgr->GetOption<std::string>(p + "SummaryModel", "claude-haiku-5-5", false);
+    c.chapterEvents = std::clamp<uint32>(sConfigMgr->GetOption<uint32>(p + "ChapterEvents", 25, false), 5, 200);
+    c.memoryMaxBullets = std::clamp<uint32>(sConfigMgr->GetOption<uint32>(p + "MemoryMaxBullets", 30, false), 12, 200);
 
     if (c.enable)
     {
@@ -247,25 +315,32 @@ std::shared_ptr<std::string const> PersonalityMgr::Frame() const
 
 void PersonalityMgr::LoadFrame(std::string dir)
 {
-    std::filesystem::path const file = Utf8Path(dir) / "_frame.md";
-    std::string text;
-    std::error_code error;
-    if (std::filesystem::is_regular_file(file, error))
+    // _frame.md for party chat, _whisper.md for whisper chats; a missing one leaves the built-in text.
+    auto read = [&dir](char const* name)
     {
-        std::ifstream in(file, std::ios::binary);
-        std::string raw(64 * 1024, '\0');  // a frame is a page, not a book
-        in.read(raw.data(), std::streamsize(raw.size()));
-        raw.resize(size_t(in.gcount()));
-        text = PersonalityTrim(PersonalityStripComments(std::move(raw)));
-    }
-
-    if (text.empty())
-        LOG_INFO("playerbots", "Bot personalities: no {}, the built-in frame is used.", PathUtf8(file));
-    else
-        LOG_INFO("playerbots", "Bot personalities: frame read from {} ({} bytes).", PathUtf8(file), text.size());
+        std::filesystem::path const file = Utf8Path(dir) / name;
+        std::string text;
+        std::error_code error;
+        if (std::filesystem::is_regular_file(file, error))
+        {
+            std::ifstream in(file, std::ios::binary);
+            std::string raw(64 * 1024, '\0');  // a frame is a page, not a book
+            in.read(raw.data(), std::streamsize(raw.size()));
+            raw.resize(size_t(in.gcount()));
+            text = PersonalityTrim(PersonalityStripComments(std::move(raw)));
+        }
+        if (text.empty())
+            LOG_INFO("playerbots", "Bot personalities: no {}, the built-in text is used.", PathUtf8(file));
+        else
+            LOG_INFO("playerbots", "Bot personalities: {} read ({} bytes).", PathUtf8(file), text.size());
+        return text;
+    };
+    std::string party = read("_frame.md");
+    std::string whisper = read("_whisper.md");
 
     std::lock_guard<std::mutex> guard(configLock);
-    frame = std::make_shared<std::string const>(std::move(text));
+    frame = std::make_shared<std::string const>(std::move(party));
+    whisperFrame = std::make_shared<std::string const>(std::move(whisper));
 }
 
 bool PersonalityMgr::IsPersonalityAlt(Player* bot, Player* player) { return CoaMissionMgr::IsMissionBot(bot, player); }
@@ -349,34 +424,15 @@ void PersonalityMgr::LoadFile(ObjectGuid::LowType guid, std::string name, std::s
     namespace fs = std::filesystem;
 
     PersonalityText text;
+    std::vector<std::string> memories;
     std::string path;
-    std::error_code error;
 
     if (IsSafePersonalityName(name))
     {
         fs::path const folder = Utf8Path(dir);
-        fs::path file = folder / Utf8Path(name + ".md");
-
-        // Linux tells "thraxa.md" from "Thraxa.md": any case of the name will do.
-        if (!fs::is_regular_file(file, error))
+        if (fs::path const file = FindInFolder(folder, name + ".md"); !file.empty())
         {
-            file.clear();
-            std::string const wanted = PersonalityFoldAscii(name + ".md");
-            for (fs::directory_iterator it(folder, error), end; !error && it != end; it.increment(error))
-                if (it->is_regular_file(error) && PersonalityFoldAscii(PathUtf8(it->path().filename())) == wanted)
-                {
-                    file = it->path();
-                    break;
-                }
-        }
-
-        if (!file.empty())
-        {
-            std::ifstream in(file, std::ios::binary);
-            std::string raw(ReadLimit, '\0');
-            in.read(raw.data(), std::streamsize(raw.size()));
-            raw.resize(size_t(in.gcount()));
-            text = ParsePersonality(std::move(raw), maxBytes);
+            text = ParsePersonality(ReadAll(file), maxBytes);
             path = PathUtf8(file);
 
             if (text.Empty())
@@ -385,6 +441,12 @@ void PersonalityMgr::LoadFile(ObjectGuid::LowType guid, std::string name, std::s
                 LOG_INFO("playerbots", "Personality of {} read from {} ({} bytes{}).", name, path, text.bytes,
                          text.truncated ? ", cut at AiPlayerbot.Personality.MaxFileBytes" : "");
         }
+        if (!text.Empty())
+            if (fs::path const file = FindInFolder(folder, name + ".memory.md"); !file.empty())
+            {
+                std::lock_guard<std::mutex> guard(memoryLock);  // not halfway through a write
+                memories = MemoryBullets(PersonalityStripComments(ReadAll(file)));
+            }
     }
 
     std::lock_guard<std::mutex> guard(filesLock);
@@ -394,6 +456,7 @@ void PersonalityMgr::LoadFile(ObjectGuid::LowType guid, std::string name, std::s
     entry->second.state = text.Empty() ? PersonalityFileState::Missing : PersonalityFileState::Loaded;
     entry->second.path = path;
     entry->second.text = std::move(text);
+    entry->second.memories = std::move(memories);
 }
 
 PersonalityFileState PersonalityMgr::FileState(ObjectGuid::LowType guid) const
@@ -431,6 +494,7 @@ void PersonalityMgr::OnPlayerUpdate(Player* player, uint32 diff)
     if (player->GetSession()->IsBot() || !IsRealPlayer(player))
     {
         SayLines(player);
+        WhisperUpdate(player);
         return;
     }
 
@@ -540,7 +604,7 @@ void PersonalityMgr::OnPlayerUpdate(Player* player, uint32 diff)
                 where = scene.instanceName;
             }
             std::string const together = JoinNames(names) + " are together" + (where.empty() ? "" : " in " + where);
-            scene.log.Add(now, stamp, "", together, 0);
+            Log(scene, now, stamp, "", together, 0);
             if (cfg->Talks())
                 Offer(scene, TriggerKind::Event, together + ": the party just formed", 3000, nowMs);
             found = scenes.find(key);
@@ -551,13 +615,13 @@ void PersonalityMgr::OnPlayerUpdate(Player* player, uint32 diff)
             for (auto const& [guid, name] : roster)
                 if (!scene.roster.count(guid))
                 {
-                    scene.log.Add(now, stamp, "", name + " joined the party", 0);
+                    Log(scene, now, stamp, "", name + " joined the party", 0);
                     if (cfg->Talks() && roll_chance_i(int(cfg->eventChance)))
                         Offer(scene, TriggerKind::Event, name + " joined the party", 2000, nowMs);
                 }
             for (auto const& [guid, name] : scene.roster)
                 if (!roster.count(guid))
-                    scene.log.Add(now, stamp, "", name + " left the party", 0);
+                    Log(scene, now, stamp, "", name + " left the party", 0);
         }
 
         Scene& scene = found->second;
@@ -566,7 +630,7 @@ void PersonalityMgr::OnPlayerUpdate(Player* player, uint32 diff)
             std::string const wipe = "the party wiped" +
                 (scene.instanceName.empty() ? (cards.front().zone.empty() ? "" : " in " + cards.front().zone)
                                             : " in " + scene.instanceName);
-            if (scene.log.Add(now, stamp, "wipe", wipe, 30) && cfg->Talks())
+            if (Log(scene, now, stamp, "wipe", wipe, 30) && cfg->Talks())
                 Offer(scene, TriggerKind::Event, wipe, 2000, nowMs);
         }
 
@@ -581,6 +645,8 @@ void PersonalityMgr::OnPlayerUpdate(Player* player, uint32 diff)
         scene.language = language;
 
         job = Direct(key, scene, *cfg, nowMs);
+        if (scene.chapter.size() >= cfg->chapterEvents)
+            EndChapter(scene, "a long stretch of play went by", *cfg, false);
     }
 
     if (job)
@@ -664,17 +730,16 @@ std::function<void()> PersonalityMgr::Direct(uint64 key, Scene& scene, Personali
 
     while (!scene.exchangesThisHour.empty() && MsSince(scene.exchangesThisHour.front(), now) > int32(HOUR * IN_MILLISECONDS))
         scene.exchangesThisHour.pop_front();
-    if (cfg.maxExchangesPerHour && scene.exchangesThisHour.size() >= cfg.maxExchangesPerHour)
+    // The hourly budget is for what the alts start on their own: the player talking is always answered (the
+    // daily budget still holds), and counts like the rest.
+    if (cfg.maxExchangesPerHour && scene.exchangesThisHour.size() >= cfg.maxExchangesPerHour &&
+        trigger.kind != TriggerKind::PlayerTalk)
     {
         trigger = Trigger{};
         return {};
     }
 
-    uint32 const today = uint32(time(nullptr) / DAY);
-    std::pair<uint32, uint32>& daily = dailyCalls[scene.account];
-    if (daily.first != today)
-        daily = {today, 0};
-    if (cfg.dailyCallsPerAccount && daily.second >= cfg.dailyCallsPerAccount)
+    if (!DailyRoom(scene.account, cfg.dailyCallsPerAccount))
     {
         // Said once, so that the player knows why the alts went quiet.
         if (trigger.kind == TriggerKind::PlayerTalk && !scene.talkedOutSaid && !scene.roster.empty())
@@ -697,7 +762,6 @@ std::function<void()> PersonalityMgr::Direct(uint64 key, Scene& scene, Personali
     input.recentLines.assign(scene.recentSaid.begin(), scene.recentSaid.end());
     input.playerName = scene.playerName;
     input.language = scene.language;
-    input.maxLines = cfg.maxLines;
     input.trigger = trigger.text;
     input.scene = scene.log.Lines();
     for (PersonalityCard const& card : scene.cards)
@@ -711,21 +775,26 @@ std::function<void()> PersonalityMgr::Direct(uint64 key, Scene& scene, Personali
             auto entry = files.find(guid);
             if (entry == files.end() || entry->second.text.Empty())
                 continue;
-            input.characters.push_back({guid, name, entry->second.text});
+            input.characters.push_back({guid, name, entry->second.text, entry->second.memories});
             speakers[PersonalityFoldAscii(name)] = {guid, name};
         }
     }
+    for (auto const& [guid, name] : scene.roster)
+        if (auto said = scene.saidBy.find(name); said != scene.saidBy.end())
+            input.worn.emplace_back(name, WornPersonalityPhrases({said->second.begin(), said->second.end()}));
     if (input.characters.empty())
     {
         trigger = Trigger{};
         return {};
     }
+    // Room for every alt of the party to say something: MaxLines is the least, six the most.
+    input.maxLines = std::min<uint32>(6, std::max<uint32>(cfg.maxLines, uint32(input.characters.size())));
 
     bool const answersPlayer = trigger.kind == TriggerKind::PlayerTalk;
     trigger = Trigger{};
     scene.inFlight = true;
     scene.exchangesThisHour.push_back(now);
-    ++daily.second;
+    SpendDaily(scene.account);
     ++callsInFlight;
     {
         std::lock_guard<std::mutex> guard(statsLock);
@@ -733,7 +802,7 @@ std::function<void()> PersonalityMgr::Direct(uint64 key, Scene& scene, Personali
     }
 
     PersonalityApiSettings const settings = cfg.api;
-    uint32 const maxLines = cfg.maxLines;
+    uint32 const maxLines = input.maxLines;
     return [this, key, input = std::move(input), speakers = std::move(speakers), answersPlayer, settings, maxLines]()
     {
         PersonalityApiResult result =
@@ -801,12 +870,8 @@ std::string PersonalityMgr::IdleSeed(Scene const& scene) const
     return seeds.empty() ? std::string() : seeds[urand(0, uint32(seeds.size() - 1))];
 }
 
-void PersonalityMgr::FinishExchange(uint64 key,
-                                    std::unordered_map<std::string, std::pair<ObjectGuid::LowType, std::string>> speakers,
-                                    bool answersPlayer, uint32 maxLines, PersonalityApiResult result)
+void PersonalityMgr::Account(PersonalityApiResult const& result)
 {
-    --callsInFlight;
-
     {
         std::lock_guard<std::mutex> guard(statsLock);
         stats.inputTokens += result.inputTokens;
@@ -830,6 +895,533 @@ void PersonalityMgr::FinishExchange(uint64 key,
         LOG_INFO("playerbots.personality", "{} line(s) from {} in {} ms: {} in, {} from cache, {} cached, {} out",
                  result.lines.size(), result.model, result.latencyMs, result.inputTokens, result.cacheReadTokens,
                  result.cacheWriteTokens, result.outputTokens);
+}
+
+bool PersonalityMgr::Log(Scene& scene, time_t now, std::string stamp, std::string key, std::string text, int64 dedupSeconds)
+{
+    std::string const line = "[" + stamp + "] " + text;
+    if (!scene.log.Add(now, std::move(stamp), std::move(key), std::move(text), dedupSeconds))
+        return false;
+    // Also part of the chapter the next memories are written from (kept bounded when nobody writes them).
+    scene.chapter.push_back(line);
+    if (scene.chapter.size() > 200)
+        scene.chapter.erase(scene.chapter.begin());
+    return true;
+}
+
+void PersonalityMgr::EndChapter(Scene& scene, std::string reason, PersonalityConfig const& cfg, bool always)
+{
+    // A chapter of a handful of lines leaves nothing worth a memory.
+    if (!cfg.Remembers() || scene.chapter.size() < 4 || scene.roster.empty() || (!always && scene.chapter.size() < cfg.chapterEvents))
+    {
+        if (always || !cfg.Remembers())
+            scene.chapter.clear();
+        return;
+    }
+
+    if (!DailyRoom(scene.account, cfg.dailyCallsPerAccount))
+    {
+        scene.chapter.clear();
+        return;
+    }
+
+    MemoryInput input;
+    input.playerName = scene.playerName;
+    input.language = scene.language;
+    input.events = std::move(scene.chapter);
+    input.reason = std::move(reason);
+    scene.chapter.clear();
+
+    std::unordered_map<std::string, std::pair<ObjectGuid::LowType, std::string>> owners;
+    {
+        std::lock_guard<std::mutex> guard(filesLock);
+        for (auto const& [guid, name] : scene.roster)
+        {
+            auto entry = files.find(guid);
+            if (entry == files.end() || entry->second.text.Empty())
+                continue;
+            MemoryCompanion companion;
+            companion.name = name;
+            if (std::string const* who = entry->second.text.Find("Who I am"))
+                companion.who = PersonalityPlainChat(*who, 400);  // never cut in the middle of a character
+            std::vector<std::string> const& known = entry->second.memories;
+            companion.memories.assign(known.end() - std::min<ptrdiff_t>(8, ptrdiff_t(known.size())), known.end());
+            input.companions.push_back(std::move(companion));
+            owners[PersonalityFoldAscii(name)] = {guid, name};
+        }
+    }
+    if (input.companions.empty())
+        return;
+    std::sort(input.companions.begin(), input.companions.end(),
+              [](MemoryCompanion const& a, MemoryCompanion const& b) { return a.name < b.name; });
+
+    SpendDaily(scene.account);
+    PostMemories(std::move(input), std::move(owners), cfg);
+}
+
+void PersonalityMgr::PostMemories(MemoryInput input,
+                                  std::unordered_map<std::string, std::pair<ObjectGuid::LowType, std::string>> owners,
+                                  PersonalityConfig const& cfg)
+{
+    {
+        std::lock_guard<std::mutex> guard(statsLock);
+        ++stats.calls;
+        ++stats.summaries;
+    }
+
+    PersonalityApiSettings const summary = SummarySettings(cfg);
+    std::string const dir = cfg.dir;
+    uint32 const maxBullets = cfg.memoryMaxBullets;
+    Post([this, input = std::move(input), owners = std::move(owners), summary, dir, maxBullets]()
+    {
+        uint32 const most = uint32(input.companions.size() * 2);
+        PersonalityApiResult result = RequestPersonalityLines(summary, BuildMemorySystem(input), BuildMemoryUser(input), most);
+        Account(result);
+        if (!result.ok)
+            return;
+
+        // Up to two memories each, to the companion they belong to.
+        std::unordered_map<ObjectGuid::LowType, std::pair<std::string, std::vector<std::string>>> added;
+        for (PersonalityLine const& line : result.lines)
+        {
+            auto owner = owners.find(PersonalityFoldAscii(PersonalityTrim(line.speaker)));
+            if (owner == owners.end())
+                continue;
+            std::string text = PersonalitySanitizeLine(line.text, owner->second.second, 200);
+            auto& [name, memories] = added[owner->second.first];
+            name = owner->second.second;
+            if (!text.empty() && memories.size() < 2)
+                memories.push_back(std::move(text));
+        }
+        for (auto& [guid, entry] : added)
+            if (!entry.second.empty())
+                SaveMemories(guid, entry.first, std::move(entry.second), dir, input.language, summary, maxBullets);
+    });
+}
+
+bool PersonalityMgr::DailyRoom(uint32 account, uint32 limit)
+{
+    std::lock_guard<std::mutex> guard(budgetLock);
+    uint32 const today = uint32(time(nullptr) / DAY);
+    std::pair<uint32, uint32>& daily = dailyCalls[account];
+    if (daily.first != today)
+        daily = {today, 0};
+    return !limit || daily.second < limit;
+}
+
+void PersonalityMgr::SpendDaily(uint32 account)
+{
+    std::lock_guard<std::mutex> guard(budgetLock);
+    uint32 const today = uint32(time(nullptr) / DAY);
+    std::pair<uint32, uint32>& daily = dailyCalls[account];
+    if (daily.first != today)
+        daily = {today, 0};
+    ++daily.second;
+}
+
+void PersonalityMgr::SaveMemories(ObjectGuid::LowType guid, std::string name, std::vector<std::string> added,
+                                  std::string dir, std::string language, PersonalityApiSettings summary,
+                                  uint32 maxBullets)
+{
+    namespace fs = std::filesystem;
+    if (!IsSafePersonalityName(name))
+        return;
+
+    std::lock_guard<std::mutex> guard(memoryLock);
+    fs::path const folder = Utf8Path(dir);
+    fs::path file = FindInFolder(folder, name + ".memory.md");
+    if (file.empty())
+        file = folder / Utf8Path(name + ".memory.md");
+
+    // Read again, so that what the player edited by hand since is kept: notes stay, "- " lines are the memories.
+    std::string raw = ReadAll(file);
+    if (raw.empty())
+        raw = "<!-- Long-term memories of " + name + ", written by the server at the end of each chapter of play.\n"
+              "     Each \"- \" line is one memory, oldest first. Edit or delete them freely, then whisper\n"
+              "     \"personality reload\" to " + name + ". Text between these comment marks is never sent. -->\n";
+    std::vector<std::string> lines;
+    for (size_t start = 0; start < raw.size();)
+    {
+        size_t end = raw.find('\n', start);
+        if (end == std::string::npos)
+            end = raw.size();
+        std::string line = raw.substr(start, end - start);
+        if (!line.empty() && line.back() == '\r')
+            line.pop_back();
+        lines.push_back(std::move(line));
+        start = end + 1;
+    }
+    while (!lines.empty() && lines.back().empty())
+        lines.pop_back();
+
+    std::string const today = Today();
+    for (std::string const& memory : added)
+        lines.push_back("- " + today + " " + memory);
+
+    auto isBullet = [](std::string const& line)
+    {
+        std::string const trimmed = PersonalityTrim(line);
+        return trimmed.size() > 2 && trimmed.compare(0, 2, "- ") == 0;
+    };
+    size_t bullets = size_t(std::count_if(lines.begin(), lines.end(), isBullet));
+
+    // Too many: the ten oldest are folded into two or three, so old history fades the way memory does.
+    if (bullets > maxBullets)
+    {
+        std::vector<std::string> oldest;
+        std::vector<size_t> where;
+        for (size_t i = 0; i < lines.size() && oldest.size() < 10; ++i)
+            if (isBullet(lines[i]))
+            {
+                oldest.push_back(PersonalityTrim(std::string_view(lines[i]).substr(lines[i].find("- ") + 2)));
+                where.push_back(i);
+            }
+        PersonalityApiResult folded = RequestPersonalityLines(summary, BuildMemoryFoldSystem(name, language),
+                                                              BuildMemoryFoldUser(oldest), 3);
+        Account(folded);
+        if (folded.ok && !folded.lines.empty())
+        {
+            // Dated like the newest memory folded in.
+            std::string const date = oldest.back().size() >= 10 ? oldest.back().substr(0, 10) : today;
+            std::vector<std::string> replacement;
+            for (PersonalityLine const& line : folded.lines)
+                if (std::string text = PersonalitySanitizeLine(line.text, name, 200); !text.empty() && replacement.size() < 3)
+                    replacement.push_back("- " + date + " " + text);
+            for (auto it = where.rbegin(); it != where.rend(); ++it)
+                lines.erase(lines.begin() + ptrdiff_t(*it));
+            lines.insert(lines.begin() + ptrdiff_t(where.front()), replacement.begin(), replacement.end());
+        }
+    }
+
+    std::string text;
+    for (std::string const& line : lines)
+        text += line + "\n";
+    {
+        std::ofstream out(file, std::ios::binary | std::ios::trunc);
+        out.write(text.data(), std::streamsize(text.size()));
+        if (!out)
+        {
+            LOG_WARN("playerbots", "Bot personalities: could not write {}.", PathUtf8(file));
+            return;
+        }
+    }
+    LOG_INFO("playerbots", "Bot personalities: {} new memories for {} in {}.", added.size(), name, PathUtf8(file));
+
+    {
+        std::lock_guard<std::mutex> statsGuard(statsLock);
+        stats.memoriesWritten += uint32(added.size());
+    }
+    std::lock_guard<std::mutex> filesGuard(filesLock);
+    if (auto entry = files.find(guid); entry != files.end())
+        entry->second.memories = MemoryBullets(PersonalityStripComments(text));
+}
+
+std::vector<std::string> PersonalityMgr::RecentMemories(Player* bot, size_t count) const
+{
+    std::lock_guard<std::mutex> guard(filesLock);
+    auto entry = files.find(bot->GetGUID().GetCounter());
+    if (entry == files.end())
+        return {};
+    std::vector<std::string> const& all = entry->second.memories;
+    return {all.end() - std::min<ptrdiff_t>(ptrdiff_t(count), ptrdiff_t(all.size())), all.end()};
+}
+
+void PersonalityMgr::ForgetMemories(Player* bot)
+{
+    ObjectGuid::LowType const guid = bot->GetGUID().GetCounter();
+    std::string const name = bot->GetName();
+    std::string const dir = Config()->dir;
+    Post([this, guid, name, dir]()
+    {
+        namespace fs = std::filesystem;
+        {
+            std::lock_guard<std::mutex> guard(memoryLock);
+            if (fs::path const file = FindInFolder(Utf8Path(dir), name + ".memory.md"); !file.empty())
+            {
+                std::error_code error;
+                fs::path backup = file;
+                backup += ".bak";
+                fs::remove(backup, error);
+                fs::rename(file, backup, error);
+                if (error)
+                    LOG_WARN("playerbots", "Bot personalities: could not set aside {}: {}", PathUtf8(file), error.message());
+            }
+        }
+        std::lock_guard<std::mutex> guard(filesLock);
+        if (auto entry = files.find(guid); entry != files.end())
+            entry->second.memories.clear();
+    });
+}
+
+void PersonalityMgr::OnWhisper(Player* bot, Player* from, std::string const& text)
+{
+    std::shared_ptr<PersonalityConfig const> const cfg = Config();
+    if (!cfg->Talks() || !IsPersonalityAlt(bot, from))
+        return;
+    {
+        std::lock_guard<std::mutex> guard(filesLock);
+        auto entry = files.find(bot->GetGUID().GetCounter());
+        if (entry == files.end() || entry->second.text.Empty())
+            return;  // an alt without a personality keeps ignoring what it does not understand
+    }
+    std::string const line = PersonalityPlainChat(text);
+    if (line.empty())
+        return;
+
+    int32 const textLocale = sPlayerbotAIConfig.botTextLocale;
+    std::string const language =
+        LanguageName(textLocale >= 0 ? uint32(textLocale) : uint32(from->GetSession()->GetSessionDbcLocale()));
+
+    {
+        std::lock_guard<std::mutex> guard(whispersLock);
+        WhisperChat& chat = whispers[bot->GetGUID().GetCounter()];
+        chat.name = bot->GetName();
+        chat.player = from->GetName();
+        chat.account = from->GetSession()->GetAccountId();
+        chat.language = language;
+        chat.history.push_back(chat.player + ": " + line);
+        while (chat.history.size() > 20)
+            chat.history.pop_front();
+        chat.chapter.push_back("[" + Stamp(time(nullptr)) + "] " + chat.player + " whispered: \"" + line + "\"");
+        if (chat.inFlight || !chat.lines.empty())
+        {
+            // Still answering: the newest whisper is answered next, with the ones before it as context.
+            if (!chat.pending)
+            {
+                chat.pending = true;
+                ++whisperWork;
+            }
+            return;
+        }
+    }
+    DispatchWhisper(bot);
+}
+
+void PersonalityMgr::DispatchWhisper(Player* bot)
+{
+    std::shared_ptr<PersonalityConfig const> const cfg = Config();
+    ObjectGuid::LowType const guid = bot->GetGUID().GetCounter();
+
+    WhisperInput input;
+    {
+        std::lock_guard<std::mutex> guard(configLock);
+        input.frame = *whisperFrame;
+    }
+    {
+        std::lock_guard<std::mutex> guard(filesLock);
+        auto entry = files.find(guid);
+        if (entry == files.end() || entry->second.text.Empty())
+            return;
+        input.character = {guid, bot->GetName(), entry->second.text, entry->second.memories};
+    }
+    input.cards.push_back(ToPromptCard(MakeCard(bot, false)));
+    // What the alt's party went through lately, when it is in one with a scene.
+    if (Group* group = bot->GetGroup())
+    {
+        std::lock_guard<std::mutex> guard(scenesLock);
+        auto found = scenes.find(group->GetGUID().GetRawValue());
+        if (found != scenes.end() && found->second.active)
+        {
+            std::vector<std::string> const lines = found->second.log.Lines();
+            input.scene.assign(lines.end() - std::min<ptrdiff_t>(12, ptrdiff_t(lines.size())), lines.end());
+        }
+    }
+
+    {
+        std::lock_guard<std::mutex> guard(whispersLock);
+        auto found = whispers.find(guid);
+        if (found == whispers.end() || found->second.inFlight)
+            return;
+        WhisperChat& chat = found->second;
+        auto settle = [&chat, this]()
+        {
+            if (chat.pending)
+            {
+                chat.pending = false;
+                --whisperWork;
+            }
+        };
+
+        if (!DailyRoom(chat.account, cfg->dailyCallsPerAccount))
+        {
+            settle();  // over the daily budget: left unanswered
+            return;
+        }
+        if (callsInFlight.load() >= cfg->maxInFlight)
+        {
+            if (!chat.pending)  // tried again from the alt's update
+            {
+                chat.pending = true;
+                ++whisperWork;
+            }
+            return;
+        }
+
+        // The newest whisper of the player is the message; everything before it is the conversation.
+        std::string const prefix = chat.player + ": ";
+        auto last = std::find_if(chat.history.rbegin(), chat.history.rend(),
+                                 [&prefix](std::string const& line) { return line.compare(0, prefix.size(), prefix) == 0; });
+        if (last == chat.history.rend())
+        {
+            settle();
+            return;
+        }
+        input.message = last->substr(prefix.size());
+        input.conversation.assign(chat.history.begin(), std::prev(last.base()));
+        input.playerName = chat.player;
+        input.language = chat.language;
+        input.worn = WornPersonalityPhrases({chat.said.begin(), chat.said.end()});
+
+        settle();
+        chat.inFlight = true;
+        chat.lastCallMs = getMSTime();
+        SpendDaily(chat.account);
+        ++callsInFlight;
+        std::lock_guard<std::mutex> statsGuard(statsLock);
+        ++stats.calls;
+    }
+
+    PersonalityApiSettings const settings = cfg->api;
+    Post([this, guid, input = std::move(input), settings]()
+    {
+        PersonalityApiResult result = RequestPersonalityLines(settings, BuildWhisperSystem(input), BuildWhisperUser(input), 2);
+        FinishWhisper(guid, std::move(result));
+    });
+}
+
+void PersonalityMgr::FinishWhisper(ObjectGuid::LowType guid, PersonalityApiResult result)
+{
+    --callsInFlight;
+    Account(result);
+
+    std::lock_guard<std::mutex> guard(whispersLock);
+    auto found = whispers.find(guid);
+    if (found == whispers.end())
+        return;  // the alt logged out meanwhile
+    WhisperChat& chat = found->second;
+    chat.inFlight = false;
+    if (!result.ok)
+        return;
+
+    uint32 due = getMSTime() + urand(400, 1200);
+    uint32 added = 0;
+    for (PersonalityLine const& line : result.lines)
+    {
+        if (added >= 2)
+            break;
+        std::string text = PersonalitySanitizeLine(line.text, chat.name);
+        if (text.empty())
+            continue;
+        uint32 const length = uint32(text.size());
+        chat.lines.push_back({guid, chat.name, std::move(text), due, true});
+        ++added;
+        due += 1200 + 35 * length + urand(0, 1000);
+    }
+    whisperWork += added;
+
+    std::lock_guard<std::mutex> statsGuard(statsLock);
+    stats.whispers += added ? 1 : 0;
+    stats.lines += added;
+}
+
+void PersonalityMgr::WhisperUpdate(Player* bot)
+{
+    if (!whisperWork.load(std::memory_order_relaxed))
+        return;
+
+    std::string text;
+    std::string player;
+    bool dispatch = false;
+    {
+        std::lock_guard<std::mutex> guard(whispersLock);
+        auto found = whispers.find(bot->GetGUID().GetCounter());
+        if (found == whispers.end())
+            return;
+        WhisperChat& chat = found->second;
+        uint32 const now = getMSTime();
+
+        if (!chat.lines.empty())
+        {
+            if (MsSince(chat.lines.front().dueMs, now) < 0)
+                return;
+            text = std::move(chat.lines.front().text);
+            chat.lines.pop_front();
+            --whisperWork;
+            player = chat.player;
+
+            chat.history.push_back(chat.name + ": " + text);
+            while (chat.history.size() > 20)
+                chat.history.pop_front();
+            chat.said.push_back(text);
+            while (chat.said.size() > 6)
+                chat.said.pop_front();
+            chat.chapter.push_back("[" + Stamp(time(nullptr)) + "] " + chat.name + " whispered back: \"" + text + "\"");
+
+            // A long conversation is remembered as it goes, not only at logout.
+            std::shared_ptr<PersonalityConfig const> const cfg = Config();
+            if (chat.chapter.size() >= cfg->chapterEvents)
+                EndWhisperChapter(chat, *cfg);
+        }
+        else if (chat.pending && !chat.inFlight && MsSince(chat.lastCallMs, now) >= 2000)
+            dispatch = true;
+        else
+            return;
+    }
+
+    if (dispatch)
+    {
+        DispatchWhisper(bot);
+        return;
+    }
+    if (PlayerbotAI* botAI = GET_PLAYERBOT_AI(bot))
+        botAI->Whisper(text, player);
+}
+
+void PersonalityMgr::EndWhisperChapter(WhisperChat& chat, PersonalityConfig const& cfg)
+{
+    std::vector<std::string> events = std::move(chat.chapter);
+    chat.chapter.clear();
+    if (!cfg.Remembers() || events.size() < 4 || !DailyRoom(chat.account, cfg.dailyCallsPerAccount))
+        return;
+
+    MemoryInput input;
+    input.playerName = chat.player;
+    input.language = chat.language;
+    input.events = std::move(events);
+    input.reason = "a private whispered conversation between " + chat.player + " and " + chat.name +
+                   " ended: only " + chat.name + " remembers it";
+
+    std::unordered_map<std::string, std::pair<ObjectGuid::LowType, std::string>> owners;
+    {
+        std::lock_guard<std::mutex> guard(filesLock);
+        for (auto const& [guid, entry] : files)
+        {
+            if (entry.name != chat.name || entry.text.Empty())
+                continue;
+            MemoryCompanion companion;
+            companion.name = chat.name;
+            if (std::string const* who = entry.text.Find("Who I am"))
+                companion.who = PersonalityPlainChat(*who, 400);
+            companion.memories.assign(entry.memories.end() - std::min<ptrdiff_t>(8, ptrdiff_t(entry.memories.size())),
+                                      entry.memories.end());
+            input.companions.push_back(std::move(companion));
+            owners[PersonalityFoldAscii(chat.name)] = {guid, chat.name};
+            break;
+        }
+    }
+    if (input.companions.empty())
+        return;
+
+    SpendDaily(chat.account);
+    PostMemories(std::move(input), std::move(owners), cfg);
+}
+
+void PersonalityMgr::FinishExchange(uint64 key,
+                                    std::unordered_map<std::string, std::pair<ObjectGuid::LowType, std::string>> speakers,
+                                    bool answersPlayer, uint32 maxLines, PersonalityApiResult result)
+{
+    --callsInFlight;
+    Account(result);
 
     uint32 const now = getMSTime();
     uint32 added = 0;
@@ -894,6 +1486,10 @@ void PersonalityMgr::SayLines(Player* bot)
         scene.recentSaid.push_back(line.name + ": " + line.text);
         while (scene.recentSaid.size() > 12)
             scene.recentSaid.pop_front();
+        std::deque<std::string>& own = scene.saidBy[line.name];
+        own.push_back(line.text);
+        while (own.size() > 6)
+            own.pop_front();
     }
 
     PlayerbotAI* botAI = GET_PLAYERBOT_AI(bot);
@@ -928,7 +1524,7 @@ bool PersonalityMgr::Note(Group* group, ObjectGuid::LowType who, NoteFrom from, 
     if (upgrade && scene.log.Upgrade(now, key, text, dedupSeconds))
         return false;
     std::string const reaction = react != React::None ? text : std::string();
-    if (!scene.log.Add(now, std::move(stamp), std::move(key), std::move(text), dedupSeconds))
+    if (!Log(scene, now, std::move(stamp), std::move(key), std::move(text), dedupSeconds))
         return false;
 
     if (react != React::None)
@@ -942,8 +1538,15 @@ bool PersonalityMgr::Note(Group* group, ObjectGuid::LowType who, NoteFrom from, 
 
 void PersonalityMgr::OnUnparsedChat(Player* bot, Player* from, uint32 type, std::string const& text)
 {
-    // Only what the player says to the party: a whisper is for one alt, and channels are for strangers.
-    if (!Enabled() || !bot || !from || !IsPartyChat(type) || !IsRealPlayer(from))
+    if (!Enabled() || !bot || !from || !IsRealPlayer(from))
+        return;
+    // A whisper is a private chat with that alt; channels are for strangers and stay unanswered.
+    if (type == CHAT_MSG_WHISPER)
+    {
+        OnWhisper(bot, from, text);
+        return;
+    }
+    if (!IsPartyChat(type))
         return;
 
     std::string const line = PersonalityPlainChat(text);
@@ -1047,13 +1650,14 @@ void PersonalityMgr::OnMapChanged(Player* player)
         scene.instanceName = map->GetMapName();
         char const* kind = map->IsRaid() ? "raid" : map->IsBattlegroundOrArena() ? "battleground" : "dungeon";
         std::string const entered = "entered " + scene.instanceName + " (" + kind + ")";
-        if (scene.log.Add(now, stamp, "map:" + std::to_string(map->GetId()), entered, 60) && cfg->Talks() &&
+        if (Log(scene, now, stamp, "map:" + std::to_string(map->GetId()), entered, 60) && cfg->Talks() &&
             roll_chance_i(int(cfg->eventChance)))
             Offer(scene, TriggerKind::Event, "the party " + entered, 8000, getMSTime());  // once everyone is in
     }
     else if (scene.instanceMap)
     {
-        scene.log.Add(now, stamp, "", "left " + scene.instanceName, 0);
+        Log(scene, now, stamp, "", "left " + scene.instanceName, 0);
+        EndChapter(scene, "the party left " + scene.instanceName, *cfg, true);
         scene.instanceMap = 0;
         scene.instanceName.clear();
     }
@@ -1081,10 +1685,12 @@ void PersonalityMgr::OnGroupDisband(Group* group)
 {
     if (!group)
         return;
+    std::shared_ptr<PersonalityConfig const> const cfg = Config();
     std::lock_guard<std::mutex> guard(scenesLock);
     auto found = scenes.find(group->GetGUID().GetRawValue());
     if (found == scenes.end())
         return;
+    EndChapter(found->second, "the party split up", *cfg, true);
     queuedLines -= uint32(found->second.lines.size());
     scenes.erase(found);
 }
@@ -1095,8 +1701,24 @@ void PersonalityMgr::OnLogout(Player* player)
         return;
     ObjectGuid::LowType const guid = player->GetGUID().GetCounter();
     {
+        std::shared_ptr<PersonalityConfig const> const cfg = Config();
         std::lock_guard<std::mutex> guard(scenesLock);
         sampleTimers.erase(guid);
+        // The player leaves: what the party went through since the last memories is remembered now.
+        for (auto& [key, scene] : scenes)
+            if (scene.player == guid)
+                EndChapter(scene, "the session ended", *cfg, true);
+    }
+    {
+        // An alt logging out: its private conversation becomes its memories.
+        std::shared_ptr<PersonalityConfig const> const cfg = Config();
+        std::lock_guard<std::mutex> guard(whispersLock);
+        if (auto chat = whispers.find(guid); chat != whispers.end())
+        {
+            EndWhisperChapter(chat->second, *cfg);
+            whisperWork -= uint32(chat->second.lines.size()) + (chat->second.pending ? 1 : 0);
+            whispers.erase(chat);
+        }
     }
     // The file is read again at the next login: what was edited meanwhile is taken.
     std::lock_guard<std::mutex> guard(filesLock);
@@ -1111,6 +1733,7 @@ void PersonalityMgr::Update(uint32 diff)
     sweepTimer = 0;
 
     uint32 const now = getMSTime();
+    std::shared_ptr<PersonalityConfig const> const cfg = Config();
     std::lock_guard<std::mutex> guard(scenesLock);
     for (auto it = scenes.begin(); it != scenes.end();)
     {
@@ -1119,6 +1742,7 @@ void PersonalityMgr::Update(uint32 diff)
             ++it;
             continue;
         }
+        EndChapter(it->second, "the session ended", *cfg, true);
         queuedLines -= uint32(it->second.lines.size());
         it = scenes.erase(it);
     }
@@ -1166,6 +1790,26 @@ std::vector<std::string> PersonalityMgr::DescribeScene(Group* group) const
         lines.push_back("Next to answer: " + scene.trigger.text);
     if (!scene.lines.empty())
         lines.push_back(std::to_string(scene.lines.size()) + " line(s) waiting to be said");
+
+    // Why the alts may be quiet: the hourly budget, counted over the last hour.
+    std::shared_ptr<PersonalityConfig const> const cfg = Config();
+    uint32 const now = getMSTime();
+    uint32 hourCount = 0;
+    int32 oldestAge = 0;
+    for (uint32 at : scene.exchangesThisHour)
+        if (MsSince(at, now) <= int32(HOUR * IN_MILLISECONDS))
+        {
+            if (!hourCount)
+                oldestAge = MsSince(at, now);
+            ++hourCount;
+        }
+    std::string budget = "Exchanges in the last hour: " + std::to_string(hourCount) +
+                         (cfg->maxExchangesPerHour ? "/" + std::to_string(cfg->maxExchangesPerHour) : " (no limit)");
+    if (cfg->maxExchangesPerHour && hourCount >= cfg->maxExchangesPerHour)
+        budget += ": they only answer you for the next " +
+                  std::to_string((int32(HOUR * IN_MILLISECONDS) - oldestAge) / int32(MINUTE * IN_MILLISECONDS) + 1) +
+                  " min (AiPlayerbot.Personality.MaxExchangesPerHour)";
+    lines.push_back(budget);
     lines.push_back("Recent (" + std::to_string(scene.log.Size()) + "):");
     for (std::string const& line : scene.log.Lines())
         lines.push_back("  " + line);
@@ -1188,6 +1832,10 @@ std::vector<std::string> PersonalityMgr::DescribeStats() const
     lines.push_back("Calls since start: " + std::to_string(stats.calls) + " (" + std::to_string(stats.answered) +
                     " answered, " + std::to_string(stats.failed) + " failed, " + std::to_string(stats.refused) +
                     " declined), " + std::to_string(stats.lines) + " line(s) said or waiting");
+    lines.push_back("Whisper chats: " + std::to_string(stats.whispers) + " answer(s)");
+    lines.push_back("Memory: " + std::string(cfg->Remembers() ? "on, " + cfg->summaryModel : "off") + "; " +
+                    std::to_string(stats.summaries) + " chapter(s) summarized, " +
+                    std::to_string(stats.memoriesWritten) + " memories written");
     uint64 const input = stats.inputTokens + stats.cacheReadTokens + stats.cacheWriteTokens;
     lines.push_back("Tokens: " + std::to_string(input) + " in (" + std::to_string(stats.cacheReadTokens) +
                     " read from cache, " + std::to_string(stats.cacheWriteTokens) + " written to it), " +
@@ -1217,6 +1865,7 @@ std::string PersonalityMgr::StatusLine(Player* bot) const
     if (who.size() > 110)
         who = PersonalityPlainChat(who, 107) + "...";
     return "Personality: " + file + ", " + std::to_string(text.bytes) + " bytes, voice " +
-           (PersonalityVoiceOf(text) == PersonalityVoice::Player ? "player" : "character") +
+           (PersonalityVoiceOf(text) == PersonalityVoice::Player ? "player" : "character") + ", " +
+           std::to_string(entry->second.memories.size()) + " memories" +
            (text.truncated ? " (cut, the file is too long)" : "") + (who.empty() ? "." : ". " + who);
 }

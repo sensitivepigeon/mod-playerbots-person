@@ -3,7 +3,10 @@
 Status, 30 October 2026, on branch `feat/personality-phase1`:
 
 - **Phase 1 done**: built against the CoA core and tested in game.
-- **Phase 2 written**: the alts talk. On the SquidBots repack the bot server runs from `CoA-Bots\Core\`, so files go
+- **Phase 2 done**: the alts talk.
+- **Phase 3 done** (31 October, branch `feat/personality-2.8.3`, on CoA Bots 2.8.3): long-term memory as in 5.2,
+  summarized with a cheaper `SummaryModel`. Also from phase 4: whisper chats (`_whisper.md`), and a worn-phrase
+  detector that lists each alt's overused words in the prompt. On the SquidBots repack the bot server runs from `CoA-Bots\Core\`, so files go
   in `CoA-Bots\Core\personalities\`.
 
 Phase 2 differs from the text below in these points:

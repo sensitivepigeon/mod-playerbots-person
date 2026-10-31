@@ -1850,7 +1850,7 @@ AiPlayerbot.AltChatToAddon = 1
 # deaths, wipes, bosses, good loot, levels, quests, places, and what you say in party chat. With a
 # Provider and an API key, the alts talk in party chat: they answer you, react to what happens and
 # banter in quiet moments. The party chat and the scene of these groups are sent to the AI provider.
-# Whisper "personality ?" or "personality reload" to your alt; ".playerbots personality scene" and
+# Whisper "personality ?", "reload", "memory" or "forget" to your alt; ".playerbots personality scene" and
 # ".playerbots personality stats" for GMs. Every AiPlayerbot.Personality setting is read again on
 # ".reload config".
 # Default: 0 (disabled)
@@ -1876,7 +1876,8 @@ AiPlayerbot.Personality.MaxTokens = 4096
 AiPlayerbot.Personality.TimeoutMs = 30000
 AiPlayerbot.Personality.Fallbacks = 1
 
-# Lines in one exchange (all alts together), the chance in % that a notable event (a death, good loot,
+# Lines in one exchange (all alts together; never fewer than the alts of the party, up to 6), the chance in
+# % that a notable event (a death, good loot,
 # a rare, a quest, a dungeon entered) gets a reaction (a wipe, a boss, a level always do), and the
 # chance of some banter after IdleBanterSec seconds out of combat with nothing said.
 # Default: 3, 35, 120, 25
@@ -1886,12 +1887,23 @@ AiPlayerbot.Personality.IdleBanterSec = 120
 AiPlayerbot.Personality.IdleChance = 25
 
 # Budgets: seconds between two exchanges of a party (half when you talked), exchanges per party and
-# hour, API calls per account and day, and calls at the same time on the whole server. 0: no limit.
+# hour that the alts start themselves (banter, reactions; you talking is always answered and counts too),
+# API calls per account and day, and calls at the same time on the whole server. 0: no limit.
 # Default: 20, 40, 400, 4
 AiPlayerbot.Personality.ExchangeCooldownSec = 20
 AiPlayerbot.Personality.MaxExchangesPerHour = 40
 AiPlayerbot.Personality.DailyCallsPerAccount = 400
 AiPlayerbot.Personality.MaxInFlight = 4
+
+# Long-term memory: at the end of a chapter (a dungeon left, the party split, you logged out, or every
+# ChapterEvents entries of the scene), one call with SummaryModel writes 0 to 2 memories per alt to
+# <Dir>/<CharacterName>.memory.md, which you can read and edit. Past MemoryMaxBullets memories, the ten
+# oldest are folded into a few. Whisper "personality memory" or "personality forget" to your alt.
+# Default: 1, claude-haiku-5-5, 25, 30
+AiPlayerbot.Personality.Memory = 1
+AiPlayerbot.Personality.SummaryModel = "claude-haiku-5-5"
+AiPlayerbot.Personality.ChapterEvents = 25
+AiPlayerbot.Personality.MemoryMaxBullets = 30
 
 # Folder of the personality files, relative to the world server's folder. Give each realm its own.
 # Default: personalities

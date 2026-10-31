@@ -42,7 +42,7 @@ class Quest;
 // lock; the members of a scene are read from the real player's own update, on the same map, as
 // CoaGroupTelemetry does, and the exchanges are decided there too. Each alt says its lines from its own
 // update. Files and API calls run on two worker threads, never on a map or world thread.
-// Lock order: scenesLock, then filesLock, then statsLock; never the other way.
+// Lock order: scenesLock or whispersLock (never both), then filesLock, budgetLock, statsLock; configLock last.
 enum class PersonalityFileState : uint8
 {
     None,     // never asked for
@@ -75,8 +75,15 @@ struct PersonalityConfig
     uint32 dailyCallsPerAccount = 400;
     uint32 maxInFlight = 4;
 
+    // Long-term memory: at the end of a chapter, one call with SummaryModel writes <Name>.memory.md.
+    bool memory = true;
+    std::string summaryModel = "claude-haiku-5-5";
+    uint32 chapterEvents = 25;
+    uint32 memoryMaxBullets = 30;
+
     // The alts talk: a provider and a key. Without, the scene is kept and nothing is sent.
     bool Talks() const { return enable && provider == "anthropic" && !api.apiKey.empty(); }
+    bool Remembers() const { return Talks() && memory; }
 };
 
 // One member of a scene, as the real player's update last saw it.
@@ -142,6 +149,8 @@ public:
     std::vector<std::string> DescribeScene(Group* group) const;
     std::vector<std::string> DescribeStats() const;
     std::string StatusLine(Player* bot) const;
+    std::vector<std::string> RecentMemories(Player* bot, size_t count) const;
+    void ForgetMemories(Player* bot);  // the file becomes <Name>.memory.md.bak
 
 private:
     struct FileEntry
@@ -150,6 +159,7 @@ private:
         std::string name;
         std::string path;
         PersonalityText text;
+        std::vector<std::string> memories;  // <Name>.memory.md, oldest first
     };
 
     // What may start an exchange, the stronger first: the player talking beats an event, which beats a quiet moment.
@@ -201,6 +211,8 @@ private:
         std::deque<uint32> exchangesThisHour;
         std::deque<QueuedLine> lines;
         std::deque<std::string> recentSaid;  // "Gidaeus: ...", shown to the model so that it does not repeat itself
+        std::unordered_map<std::string, std::deque<std::string>> saidBy;  // each alt's own last lines: worn phrases
+        std::vector<std::string> chapter;    // what happened since the last memories were written, "[21:04] ..."
         bool talkedOutSaid = false;
     };
 
@@ -211,12 +223,31 @@ private:
         uint32 failed = 0;
         uint32 refused = 0;
         uint32 lines = 0;
+        uint32 summaries = 0;
+        uint32 memoriesWritten = 0;
+        uint32 whispers = 0;
         uint64 inputTokens = 0;
         uint64 cacheReadTokens = 0;
         uint64 cacheWriteTokens = 0;
         uint64 outputTokens = 0;
         uint32 lastLatencyMs = 0;
         std::string lastError;
+    };
+
+    // A private conversation of the player with one alt (PersonalityPrompt.h, DefaultWhisperFrame).
+    struct WhisperChat
+    {
+        std::string name;    // the alt
+        std::string player;  // its owner, who whispers
+        uint32 account = 0;
+        std::string language;
+        std::deque<std::string> history;   // "Pigeon: ...", "Sylanar: ...", the last 20
+        std::deque<std::string> said;      // the alt's own last lines: worn phrases
+        std::vector<std::string> chapter;  // what its memories are written from, at its logout
+        std::deque<QueuedLine> lines;
+        bool inFlight = false;
+        bool pending = false;  // the player whispered while it was answering: answered next
+        uint32 lastCallMs = 0;
     };
 
     enum class NoteFrom : uint8
@@ -240,6 +271,8 @@ private:
     bool Note(Group* group, ObjectGuid::LowType who, NoteFrom from, std::string key, std::string text,
               int64 dedupSeconds, React react = React::None, bool upgrade = false);
     // scenesLock held
+    bool Log(Scene& scene, time_t now, std::string stamp, std::string key, std::string text, int64 dedupSeconds);
+    void EndChapter(Scene& scene, std::string reason, PersonalityConfig const& config, bool always);
     void Offer(Scene& scene, TriggerKind kind, std::string text, uint32 delayMs, uint32 now);
     std::function<void()> Direct(uint64 key, Scene& scene, PersonalityConfig const& config, uint32 now);
     std::string IdleSeed(Scene const& scene) const;
@@ -251,10 +284,27 @@ private:
     void WorkerLoop();
     void LoadFile(ObjectGuid::LowType guid, std::string name, std::string dir, uint32 maxBytes);  // worker thread
     void LoadFrame(std::string dir);                                                              // worker thread
+    void SaveMemories(ObjectGuid::LowType guid, std::string name, std::vector<std::string> added, std::string dir,
+                      std::string language, PersonalityApiSettings summary, uint32 maxBullets);  // worker thread
+    void Account(PersonalityApiResult const& result);                                           // the stats of a call
+    void PostMemories(MemoryInput input,
+                      std::unordered_map<std::string, std::pair<ObjectGuid::LowType, std::string>> owners,
+                      PersonalityConfig const& cfg);
+    bool DailyRoom(uint32 account, uint32 limit);  // budgetLock
+    void SpendDaily(uint32 account);
+
+    // Whisper chats; the bot's own thread unless said otherwise.
+    void OnWhisper(Player* bot, Player* from, std::string const& text);
+    void DispatchWhisper(Player* bot);
+    void FinishWhisper(ObjectGuid::LowType guid, PersonalityApiResult result);  // worker thread
+    void WhisperUpdate(Player* bot);
+    void EndWhisperChapter(WhisperChat& chat, PersonalityConfig const& cfg);   // whispersLock held
+    std::mutex memoryLock;  // one memory file written at a time (workers only)
 
     mutable std::mutex configLock;
     std::shared_ptr<PersonalityConfig const> config = std::make_shared<PersonalityConfig>();
     std::shared_ptr<std::string const> frame = std::make_shared<std::string>();
+    std::shared_ptr<std::string const> whisperFrame = std::make_shared<std::string>();
     std::atomic<bool> enabled{false};
 
     mutable std::mutex filesLock;
@@ -263,7 +313,12 @@ private:
     mutable std::mutex scenesLock;
     std::unordered_map<uint64, Scene> scenes;  // by group guid
     std::unordered_map<ObjectGuid::LowType, uint32> sampleTimers;
-    std::unordered_map<uint32, std::pair<uint32, uint32>> dailyCalls;  // account: (day, calls that day)
+    std::mutex budgetLock;
+    std::unordered_map<uint32, std::pair<uint32, uint32>> dailyCalls;  // account: (day, calls that day); budgetLock
+
+    std::mutex whispersLock;
+    std::unordered_map<ObjectGuid::LowType, WhisperChat> whispers;  // by alt guid
+    std::atomic<uint32> whisperWork{0};  // whisper lines waiting and chats waiting to answer: alts look only then
     uint32 sweepTimer = 0;  // world thread only
     std::atomic<uint32> queuedLines{0};  // lines waiting in any scene: alts look only when there are some
     std::atomic<uint32> callsInFlight{0};

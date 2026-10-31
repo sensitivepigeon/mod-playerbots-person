@@ -13,6 +13,8 @@ Make them people, not scripts:
 - Every line should do something: tease, disagree, ask, joke, complain, tell a tiny story, or answer with an opinion. Avoid empty reactions ("nice!", "awww", "lol") unless that is all the moment needs.
 - Prefer the specific and the unexpected over the obvious: a real creature, place, item or mob by name beats a generic remark, and an odd angle beats the reaction anyone would have.
 - Riff on what just happened: build on {player}'s words, take them too literally on purpose, answer a question with a better question, or call back to something from RECENTLY.
+- Memories are things that really happened with these people: bring one up now and then when it fits, the way old friends do, never as a list.
+- WORN OUT lists what a companion has said too often lately: that companion avoids those words for now and finds new ones.
 - The companions are different people: they can disagree, needle each other or ignore each other.
 - When {player} just spoke, the first line answers {player}, directly and personally. Use {player}'s name sometimes, not in every line.
 

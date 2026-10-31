@@ -115,4 +115,64 @@ int main()
     assert(repeated.find("LINES ALREADY SAID (say something new: none of their catchphrases, jokes or openings again)\n"
                          "Gidaeus: Muradin's beard!\nBrana: awww :)\n") != std::string::npos);
     assert(repeated.find("LINES ALREADY SAID") < repeated.find("WHAT JUST HAPPENED"));
+
+    // Worn phrases: what one companion keeps saying, found without a list of catchphrases.
+    std::vector<std::string> const moradin = {"A sign, lad. By the mountain.", "Elves. I ate cheese by the mountain.",
+                                              "The ledger grows, lad.", "Pass the cheese."};
+    std::vector<std::string> const worn = WornPersonalityPhrases(moradin);
+    assert(std::find(worn.begin(), worn.end(), "by the mountain") != worn.end());
+    assert(std::find(worn.begin(), worn.end(), "cheese") != worn.end());
+    assert(std::find(worn.begin(), worn.end(), "mountain") == worn.end());   // inside "by the mountain"
+    assert(std::find(worn.begin(), worn.end(), "the mountain") == worn.end());
+    assert(std::find(worn.begin(), worn.end(), "lad") == worn.end());        // short words are not phrases
+    assert(std::find(worn.begin(), worn.end(), "the") == worn.end());
+    assert(WornPersonalityPhrases({"Don't stand in fire.", "dont STAND there"}) == std::vector<std::string>{"dont stand"});
+    assert(WornPersonalityPhrases({"one line only, mountain mountain"}).empty());  // counted once per line
+    assert(WornPersonalityPhrases(moradin, 1).size() == 1);
+
+    b.worn = {{"Moradin", worn}, {"Brana", {}}};
+    std::string const withWorn = BuildPersonalityUser(b);
+    assert(withWorn.find("WORN OUT") < withWorn.find("WHAT JUST HAPPENED"));
+    assert(withWorn.find("- Moradin: \"by the mountain\"") != std::string::npos);
+    assert(withWorn.find("- Brana") == std::string::npos);  // nothing worn, no line
+
+    // Memories: in the cached part, after the character's own sections.
+    PromptInput remembered = a;
+    remembered.characters[0].memories = {"2026-10-31 Named the quest egg Gerald."};
+    std::string const memorySystem = BuildPersonalitySystem(remembered);
+    assert(memorySystem.find("## Gidaeus (voice: player)") < memorySystem.find("### Memories (oldest first)\n- 2026-10-31 Named"));
+    assert(BuildPersonalitySystem(a).find("### Memories") == std::string::npos);
+    assert(memorySystem.find("bring one up now and then") != std::string::npos);  // the frame knows about them
+
+    MemoryInput chapter;
+    chapter.playerName = "Pigeon";
+    chapter.companions = {{"Sylanar", "Night Elf Primalist.", {"2026-10-30 Met Alythsera."}}};
+    chapter.events = {"[21:00] Pigeon looted [Jar of Spiders] (rare)"};
+    chapter.reason = "the party left The Deadmines";
+    assert(BuildMemorySystem(chapter).find("Never record how a companion talks") != std::string::npos);
+    std::string const chapterUser = BuildMemoryUser(chapter);
+    assert(chapterUser.find("## Sylanar\nNight Elf Primalist.\nAlready remembers:\n- 2026-10-30 Met Alythsera.") != std::string::npos);
+    assert(chapterUser.find("THE CHAPTER ENDS BECAUSE\nthe party left The Deadmines") != std::string::npos);
+    assert(BuildMemoryFoldUser({"a", "b"}) == "OLD MEMORIES (oldest first)\n- a\n- b\n\nWrite the folded memories.");
+
+    // Whisper chats: one character, the conversation so far, and the message to answer.
+    WhisperInput whisper;
+    whisper.playerName = "Pigeon";
+    whisper.character = remembered.characters[0];  // Gidaeus, with a memory
+    whisper.conversation = {"Pigeon: you there?", "Gidaeus: always."};
+    whisper.worn = {"chill out"};
+    whisper.message = "how was work";
+    std::string const whisperSystem = BuildWhisperSystem(whisper);
+    assert(whisperSystem.rfind("You write the private whispers of Gidaeus, one of Pigeon's companions", 0) == 0);
+    assert(whisperSystem.find("{name}") == std::string::npos && whisperSystem.find("{player}") == std::string::npos);
+    assert(whisperSystem.find("CHARACTER\n\n## Gidaeus (voice: player)") != std::string::npos);
+    assert(whisperSystem.find("- 2026-10-31 Named the quest egg Gerald.") != std::string::npos);
+    assert(whisperSystem.find("### Voice") == std::string::npos);
+    std::string const whisperUser = BuildWhisperUser(whisper);
+    assert(whisperUser.find("WHERE THEY ARE") == std::string::npos);  // no card, no section
+    assert(whisperUser.find("CONVERSATION SO FAR (oldest first)\nPigeon: you there?\nGidaeus: always.\n") != std::string::npos);
+    assert(whisperUser.find("WORN OUT (Gidaeus avoids these for now): \"chill out\"") != std::string::npos);
+    assert(whisperUser.find("Pigeon JUST WHISPERED\n\"how was work\"\n\nWrite Gidaeus's reply.") != std::string::npos);
+    whisper.conversation.clear();
+    assert(BuildWhisperUser(whisper).find("(this is the first whisper)") != std::string::npos);
 }

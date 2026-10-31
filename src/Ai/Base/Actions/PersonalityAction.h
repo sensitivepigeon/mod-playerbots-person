@@ -11,7 +11,8 @@
 
 class PlayerbotAI;
 
-// "personality ?" and "personality reload", whispered to an alt by its owner (PersonalityMgr).
+// "personality ?", "personality reload", "personality memory" and "personality forget", whispered to an alt by
+// its owner (PersonalityMgr).
 class PersonalityAction : public Action
 {
 public:
