@@ -1823,6 +1823,31 @@ AiPlayerbot.Missions.TeleportFallback = 1
 # Default: 1 (enabled)
 AiPlayerbot.Missions.TeleportToSpot = 1
 
+# Bot personalities, for your own characters played as bots (alts) only. An alt gets one when a file
+# <Dir>/<CharacterName>.md exists (start from personalities/_template.md); without a file nothing changes.
+# While you (one real player) group with such alts, the server keeps a scene of what your party does:
+# deaths, wipes, bosses, good loot, levels, quests, places, and what you say in party chat.
+# This version only keeps the scene (".playerbots personality scene" shows it); the alts do not talk yet.
+# Whisper "personality ?" or "personality reload" to your alt.
+# Default: 0 (disabled)
+AiPlayerbot.Personality.Enable = 0
+
+# Folder of the personality files, relative to the world server's folder. Give each realm its own.
+# Default: personalities
+AiPlayerbot.Personality.Dir = "personalities"
+
+# Largest personality file read, in bytes; the rest is cut.
+# Default: 4096
+AiPlayerbot.Personality.MaxFileBytes = 4096
+
+# Entries a party's scene keeps (the oldest go first).
+# Default: 40
+AiPlayerbot.Personality.SceneEvents = 40
+
+# Lowest item quality the scene notes when someone loots it (2 uncommon, 3 rare, 4 epic).
+# Default: 3
+AiPlayerbot.Personality.LootQuality = 3
+
 # Automatic guild bank deposits: a bot in the guild of a real player (your alts, the bots you invited)
 # standing near a guild vault puts there the items of the classes below and the gold above KeepGold.
 # Never in a guild of random bots, never during a mission, never bound, quest or equipped items.

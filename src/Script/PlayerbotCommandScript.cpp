@@ -15,6 +15,8 @@
 #include "GroupMgr.h"
 #include "GuildTaskMgr.h"
 #include "PerfMonitor.h"
+#include "PersonalityMgr.h"
+#include "PlayerbotAIConfig.h"
 #include "PlayerbotFactory.h"
 #include "PlayerbotMgr.h"
 #include "Playerbots.h"
@@ -49,6 +51,11 @@ public:
             {"unlink", HandleUnlinkAccountCommand, SEC_PLAYER, Console::No},
         };
 
+        static ChatCommandTable playerbotsPersonalityCommandTable = {
+            {"scene", HandlePersonalitySceneCommand, SEC_GAMEMASTER, Console::Yes},
+            {"reload", HandlePersonalityReloadCommand, SEC_GAMEMASTER, Console::Yes},
+        };
+
         static ChatCommandTable playerbotsCommandTable = {
             {"bot", HandlePlayerbotCommand, SEC_PLAYER, Console::No},
             {"gtask", HandleGuildTaskCommand, SEC_GAMEMASTER, Console::Yes},
@@ -60,6 +67,7 @@ public:
             {"debug", playerbotsDebugCommandTable},
             {"account", playerbotsAccountCommandTable},
             {"wildcard", playerbotsWildcardCommandTable},
+            {"personality", playerbotsPersonalityCommandTable},
         };
 
         static ChatCommandTable commandTable = {
@@ -319,6 +327,33 @@ public:
         CoaRole const role = GetWildcardRole(bot);
         handler->PSendSysMessage("{} drafted its build again as a {}.", bot->GetName(),
                                  role == CoaRole::Tank ? "tank" : role == CoaRole::Heal ? "healer" : "damage dealer");
+        return true;
+    }
+
+    // .playerbots personality scene [player]: what the party of that player (or yours) has been through lately.
+    static bool HandlePersonalitySceneCommand(ChatHandler* handler, Optional<PlayerIdentifier> target)
+    {
+        if (!target)
+            target = PlayerIdentifier::FromSelf(handler);
+        Player* player = target ? target->GetConnectedPlayer() : nullptr;
+        if (!player)
+        {
+            handler->SendSysMessage("Name an online player: .playerbots personality scene [name]");
+            return true;
+        }
+        if (!sPlayerbotAIConfig.personalityEnable)
+            handler->SendSysMessage("AiPlayerbot.Personality.Enable is 0: no scene is kept.");
+        for (std::string const& line : sPersonalityMgr.DescribeScene(player->GetGroup()))
+            handler->SendSysMessage(line);
+        return true;
+    }
+
+    // .playerbots personality reload: every personality file of an online alt is read again.
+    static bool HandlePersonalityReloadCommand(ChatHandler* handler)
+    {
+        sPersonalityMgr.ReloadAll();
+        handler->PSendSysMessage("Reading the personality files of the online alts again, from {}.",
+                                 sPersonalityMgr.FolderPath());
         return true;
     }
 
